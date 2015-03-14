@@ -4,6 +4,10 @@ var should = require('chai').should(),
 
 describe('usage tests', function () {
 
+    beforeEach(function() {
+      yargs.reset();
+    });
+
     describe('demand options', function () {
         describe('using .demand()', function () {
             it ('should show an error along with the missing arguments on demand fail', function () {
@@ -91,6 +95,22 @@ describe('usage tests', function () {
             r.should.have.property('logs').with.length(0);
             r.should.have.property('exit', false);
         });
+
+
+        it('should not show a custom message if msg is null', function() {
+            var r = checkUsage(function() {
+                return yargs('')
+                    .usage('Usage: foo')
+                    .demand(1, null)
+                    .argv
+                ;
+            });
+
+            r.errors.join('\n').split(/\n+/).should.deep.equal([
+                'Usage: foo',
+                ''
+            ]);
+        });
     });
 
     it('should return valid values when check passes', function () {
@@ -159,30 +179,6 @@ describe('usage tests', function () {
             'You forgot about -y'
         ]);
     });
-
-    exports.checkFailReturn = function () {
-        var r = checkUsage(function () {
-            return yargs('-x 10 -z 20'.split(' '))
-                .usage('Usage: $0 -x NUM -y NUM')
-                .wrap(null)
-                .check(function (argv) {
-                    if (!('x' in argv)) return 'You forgot about -x';
-                    if (!('y' in argv)) return 'You forgot about -y';
-                })
-                .argv;
-        });
-        r.should.have.property('result');
-        r.result.should.have.property('x', 10);
-        r.result.should.have.property('z', 20);
-        r.result.should.have.property('_').with.length(0);
-        r.should.have.property('logs').with.length(0);
-        r.should.have.property('exit').and.be.ok;
-        r.should.have.property('errors');
-        r.errors.join('\n').split(/\n+/).should.deep.equal([
-            'Usage: ./usage -x NUM -y NUM',
-            'You forgot about -y'
-        ]);
-    };
 
     it('should return a valid result when check condition passes', function () {
         function checker (argv) {
@@ -810,6 +806,7 @@ describe('usage tests', function () {
         r.result.should.match(/foo/);
     });
 
+
     describe('wrap', function() {
         it('should wrap argument descriptions onto multiple lines', function() {
             var r = checkUsage(function () {
@@ -859,6 +856,31 @@ describe('usage tests', function () {
               })
               .wrap(40)
               .help()
+        });
+
+        it("should wrap the left-hand-column if it takes up more than 50% of the screen", function() {
+            var r = checkUsage(function () {
+                return yargs([])
+                  .example(
+                    'i am a fairly long example command and should wrap',
+                    'description'
+                  )
+                  .demand('foo')
+                  .wrap(40)
+                  .argv;
+            });
+
+            // should split example usage onto multiple lines.
+            r.errors[0].split('\n').length.should.equal(9);
+
+            // should wrap within appropriate boundaries.
+            r.errors[0].split('\n').forEach(function(line, i) {
+              // ignore headings and blank lines.
+              if (!line || line.match('Examples:') || line.match('Options:')) return;
+
+              line.length.should.gt(30);
+              line.length.should.lte(40);
+            });
         });
 
         it('should wrap the usage string', function() {
@@ -913,6 +935,70 @@ describe('usage tests', function () {
               'for more info view the manual at http://example.com',
               'Missing required arguments: y'
           ]);
+      });
+
+      it('replaces $0 in epilog string', function() {
+          var r = checkUsage(function () {
+              return yargs('')
+                  .epilog("Try '$0 --long-help' for more information")
+                  .demand('y')
+                  .wrap(null)
+                  .argv;
+          });
+
+          r.errors.join('\n').split(/\n+/).should.deep.equal([
+              'Options:',
+              '  -y  [required]',
+              'Try \'./usage --long-help\' for more information',
+              'Missing required arguments: y'
+          ]);
+      });
+    });
+
+    describe('default', function() {
+      it('should indicate that the default is a generated-value, if function is provided', function() {
+          var r = checkUsage(function() {
+              return yargs(['-h'])
+                  .help('h')
+                  .default('f', function() {
+                    return 99;
+                  })
+                  .wrap(null)
+                  .argv
+              ;
+          });
+
+          r.logs[0].should.include('default: (generated-value)');
+      });
+
+      it('if a named function is provided, should use name rather than (generated-value)', function() {
+          var r = checkUsage(function() {
+              return yargs(['-h'])
+                  .help('h')
+                  .default('f', function randomNumber() {
+                    return Math.random() * 256;
+                  })
+                  .wrap(null)
+                  .argv
+              ;
+          });
+
+          r.logs[0].should.include('default: (random-number)');
+      });
+
+      it('default-description take precedence if one is provided', function() {
+          var r = checkUsage(function() {
+              return yargs(['-h'])
+                  .help('h')
+                  .default('f', function randomNumber() {
+                    return Math.random() * 256;
+                  }, 'foo-description')
+                  .wrap(null)
+                  .argv
+              ;
+          });
+
+          r.logs[0].should.include('default: foo-description');
       });
     });
 });

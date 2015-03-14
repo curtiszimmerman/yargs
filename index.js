@@ -1,39 +1,34 @@
-var path = require('path');
-var Parser = require('./lib/parser');
-var Usage = require('./lib/usage');
-var Validation = require('./lib/validation');
+var assert = require('assert'),
+  path = require('path'),
+  Completion = require('./lib/completion'),
+  Parser = require('./lib/parser'),
+  Usage = require('./lib/usage'),
+  Validation = require('./lib/validation');
 
-/*  Hack an instance of Argv with process.argv into Argv
-    so people can do
-        require('yargs')(['--beeble=1','-z','zizzle']).argv
-    to parse a list of args and
-        require('yargs').argv
-    to get a parsed version of process.argv.
-*/
-
-var inst = Argv(process.argv.slice(2));
-Object.keys(inst).forEach(function (key) {
-    Argv[key] = typeof inst[key] == 'function'
-        ? inst[key].bind(inst)
-        : inst[key];
-});
+Argv(process.argv.slice(2));
 
 var exports = module.exports = Argv;
 function Argv (processArgs, cwd) {
+    processArgs = processArgs || []; // handle calling yargs().
+
     var self = {};
-    var usage = Usage(self);
-    var validation = Validation(self, usage);
+    var completion = null;
+    var usage = null;
+    var validation = null;
 
     if (!cwd) cwd = process.cwd();
 
     self.$0 = process.argv
         .slice(0,2)
         .map(function (x) {
+            // ignore the node bin, specify this in your
+            // bin file with #!/usr/bin/env node
+            if (~x.indexOf('node')) return;
             var b = rebase(cwd, x);
             return x.match(/^\//) && b.length < x.length
                 ? b : x
         })
-        .join(' ')
+        .join(' ').trim();
     ;
 
     if (process.env._ != undefined && process.argv[1] == process.env._) {
@@ -43,18 +38,37 @@ function Argv (processArgs, cwd) {
     }
 
     var options;
-    self.resetOptions = function () {
+    self.resetOptions = self.reset = function () {
+        // put yargs back into its initial
+        // state, this is useful for creating a
+        // nested CLI.
         options = {
             array: [],
             boolean: [],
             string: [],
+            narg: {},
+            key: {},
             alias: {},
             default: {},
+            defaultDescription: {},
             requiresArg: [],
             count: [],
             normalize: [],
             config: []
         };
+
+        usage = Usage(self); // handle usage output.
+        validation = Validation(self, usage); // handle arg validation.
+        completion = Completion(self, usage);
+
+        demanded = {};
+
+        exitProcess = true;
+        strict = false;
+        helpOpt = null;
+        versionOpt = null;
+        completionOpt = null;
+
         return self;
     };
     self.resetOptions();
@@ -66,6 +80,17 @@ function Argv (processArgs, cwd) {
 
     self.array = function (arrays) {
         options.array.push.apply(options.array, [].concat(arrays));
+        return self;
+    }
+
+    self.nargs = function (key, n) {
+        if (typeof key === 'object') {
+            Object.keys(key).forEach(function(k) {
+                self.nargs(k, key[k]);
+            });
+        } else {
+            options.narg[key] = n;
+        }
         return self;
     }
 
@@ -94,13 +119,14 @@ function Argv (processArgs, cwd) {
         return self;
     };
 
-    self.default = function (key, value) {
+    self.default = function (key, value, defaultDescription) {
         if (typeof key === 'object') {
             Object.keys(key).forEach(function (k) {
                 self.default(k, key[k]);
             });
         }
         else {
+            options.defaultDescription[key] = defaultDescription;
             options.default[key] = value;
         }
         return self;
@@ -206,14 +232,22 @@ function Argv (processArgs, cwd) {
             });
         }
         else {
+            assert(typeof opt === 'object', 'second argument to option must be an object');
+
+            options.key[key] = true; // track manually set keys.
+
             if (opt.alias) self.alias(key, opt.alias);
 
             var demand = opt.demand || opt.required || opt.require;
+
             if (demand) {
                 self.demand(key, demand);
             }
             if ('default' in opt) {
                 self.default(key, opt.default);
+            }
+            if ('nargs' in opt) {
+                self.nargs(key, opt.nargs);
             }
             if (opt.boolean || opt.type === 'boolean') {
                 self.boolean(key);
@@ -257,6 +291,9 @@ function Argv (processArgs, cwd) {
         strict = true;
         return self;
     };
+    self.getStrict = function () {
+        return strict;
+    }
 
     self.showHelp = function (fn) {
         usage.showHelp(fn);
@@ -303,6 +340,42 @@ function Argv (processArgs, cwd) {
         return usage.help();
     };
 
+    var completionOpt = null,
+      completionCommand = null;
+    self.completion = function(cmd, desc, fn) {
+        // a function to execute when generating
+        // completions can be provided as the second
+        // or third argument to completion.
+        if (typeof desc === 'function') {
+            fn = desc;
+            desc = null;
+        }
+
+        // register the completion command.
+        completionCommand = cmd;
+        completionOpt = completion.completionKey;
+        self.command(completionCommand, desc || 'generate bash completion script');
+
+        // a function can be provided
+        if (fn) completion.registerFunction(fn);
+
+        return self;
+    };
+
+    self.showCompletionScript = function($0) {
+        $0 = $0 || self.$0;
+        console.log(completion.generateCompletionScript($0));
+        return self;
+    };
+
+    self.getUsageInstance = function () {
+        return usage;
+    };
+
+    self.getValidationInstance = function () {
+        return validation;
+    }
+
     Object.defineProperty(self, 'argv', {
         get : function () {
           var args = null;
@@ -327,6 +400,14 @@ function Argv (processArgs, cwd) {
 
         self.parsed = parsed;
 
+        // generate a completion script for adding to ~/.bashrc.
+        if (completionCommand && ~argv._.indexOf(completionCommand)) {
+            self.showCompletionScript();
+            if (exitProcess){
+                process.exit(0);
+            }
+        }
+
         Object.keys(argv).forEach(function(key) {
             if (key === helpOpt) {
                 self.showHelp('log');
@@ -340,6 +421,20 @@ function Argv (processArgs, cwd) {
                     process.exit(0);
                 }
             }
+            else if (key === completionOpt) {
+                // we allow for asynchronous completions,
+                // e.g., loading in a list of commands from an API.
+                completion.getCompletion(function(completions) {
+                    (completions || []).forEach(function(completion) {
+                        console.log(completion);
+                    });
+
+                    if (exitProcess){
+                        process.exit(0);
+                    }
+                });
+                return;
+            }
         });
 
         validation.nonOptionCount(argv);
@@ -352,10 +447,18 @@ function Argv (processArgs, cwd) {
 
         validation.customChecks(argv, aliases);
         validation.implications(argv);
+        setPlaceholderKeys(argv);
 
         return argv;
     }
 
+    function setPlaceholderKeys (argv) {
+        Object.keys(options.key).forEach(function(key) {
+            if (typeof argv[key] === 'undefined') argv[key] = undefined;
+        });
+    }
+
+    sigletonify(self);
     return self;
 };
 
@@ -365,3 +468,22 @@ exports.rebase = rebase;
 function rebase (base, dir) {
   return path.relative(base, dir);
 };
+
+/*  Hack an instance of Argv with process.argv into Argv
+    so people can do
+        require('yargs')(['--beeble=1','-z','zizzle']).argv
+    to parse a list of args and
+        require('yargs').argv
+    to get a parsed version of process.argv.
+*/
+function sigletonify(inst) {
+    Object.keys(inst).forEach(function (key) {
+        if (key === 'argv') {
+          Argv.__defineGetter__(key, inst.__lookupGetter__(key));
+        } else {
+          Argv[key] = typeof inst[key] == 'function'
+              ? inst[key].bind(inst)
+              : inst[key];
+        }
+    });
+}

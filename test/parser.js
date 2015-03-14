@@ -4,6 +4,9 @@ var should = require('chai').should(),
     path = require('path');
 
 describe('parser tests', function () {
+    beforeEach(function() {
+      yargs.reset();
+    });
 
     it('should pass when specifying a "short boolean"', function () {
         var parse = yargs.parse([ '-b' ]);
@@ -157,16 +160,6 @@ describe('parser tests', function () {
             .boolean(['t', 'verbose']).default('verbose', true).argv;
         parse.should.have.property('verbose', false).and.be.a('boolean');
         parse.should.have.property('t', true).and.be.a('boolean');
-        parse.should.have.property('_').and.deep.equal(['moo']);
-    });
-
-    it('should set boolean options to false by default', function () {
-        var parse = yargs(['moo'])
-            .boolean(['t', 'verbose'])
-            .default('verbose', false)
-            .default('t', false).argv;
-        parse.should.have.property('verbose', false).and.be.a('boolean');
-        parse.should.have.property('t', false).and.be.a('boolean');
         parse.should.have.property('_').and.deep.equal(['moo']);
     });
 
@@ -324,26 +317,6 @@ describe('parser tests', function () {
         argv.should.have.property('z', 55);
         argv.should.have.property('zm', 55);
         argv.should.have.property('f', 11);
-    });
-
-    it('should define option as boolean and set default to true', function () {
-        var argv = yargs.options({
-            sometrue: {
-                boolean: true,
-                default: true
-            }
-        }).argv;
-        argv.should.have.property('sometrue', true);
-    });
-
-    it('should define option as boolean and set default to false', function () {
-        var argv = yargs.options({
-            somefalse: {
-                boolean: true,
-                default: false
-            }
-        }).argv;
-        argv.should.have.property('somefalse', false);
     });
 
     describe('dot notation', function() {
@@ -660,10 +633,16 @@ describe('parser tests', function () {
             });
 
             describe('with implied false default', function() {
-                var argv = yargs().options({
-                    flag: {type    : 'boolean'}
-                  }),
-                  argv2 = yargs().boolean(['flag']);
+                var argv = null,
+                  argv2 = null;
+
+                beforeEach(function() {
+                    argv = yargs().options({
+                      flag: {type    : 'boolean'}
+                    });
+
+                    argv2 = yargs().boolean(['flag']);
+                });
 
                 it('should set true if --flag in arg', function() {
                     argv.parse(['--flag']).flag.should.be.true;
@@ -680,6 +659,46 @@ describe('parser tests', function () {
                     argv2.parse([ ]).flag.should.be.false;
                 });
             });
+        });
+
+        it('should define option as boolean and set default to true', function () {
+            var argv = yargs.options({
+                sometrue: {
+                    boolean: true,
+                    default: true
+                }
+            }).argv;
+            argv.should.have.property('sometrue', true);
+        });
+
+        it('should define option as boolean and set default to false', function () {
+            var argv = yargs.options({
+                somefalse: {
+                    boolean: true,
+                    default: false
+                }
+            }).argv;
+            argv.should.have.property('somefalse', false);
+        });
+
+        it('should set boolean options to false by default', function () {
+            var parse = yargs(['moo'])
+                .boolean(['t', 'verbose'])
+                .default('verbose', false)
+                .default('t', false).argv;
+            parse.should.have.property('verbose', false).and.be.a('boolean');
+            parse.should.have.property('t', false).and.be.a('boolean');
+            parse.should.have.property('_').and.deep.equal(['moo']);
+        });
+
+        it('should allow function to be provided as default value', function() {
+            var argv = yargs([])
+                .default('file', function() {
+                  return 'foo.txt';
+                })
+                .argv;
+
+            argv.file.should.equal('foo.txt');
         });
     });
 
@@ -861,6 +880,17 @@ describe('parser tests', function () {
             parsed = yargs(['--verbose', '--verbose', '-v', '-vv']).count('verbose').alias('v', 'verbose').argv;
             parsed.verbose.should.equal(5);
         });
+
+        it('should not consume the next argument', function () {
+            var parsed;
+            parsed = yargs([ '-v', 'moo' ]).count('v').argv;
+            parsed.v.should.equal(1);
+            parsed.should.have.property('_').and.deep.equal(['moo']);
+
+            parsed = yargs([ '--verbose', 'moomoo', '--verbose' ]).count('verbose').argv;
+            parsed.verbose.should.equal(2);
+            parsed.should.have.property('_').and.deep.equal(['moomoo']);
+        });
     });
 
     describe('array', function() {
@@ -886,6 +916,80 @@ describe('parser tests', function () {
             var result = yargs().option('b', {array: true}).parse(['-b', '33']);
             Array.isArray(result.b).should.equal(true);
             result.b.should.include(33);
+        });
+
+        // issue #103
+        it('should default camel-case alias to array type', function () {
+            var result = yargs().option('ca-path', {
+              array: true
+            }).parse([ '--ca-path', 'http://www.example.com' ]);
+
+            Array.isArray(result['ca-path']).should.equal(true);
+            Array.isArray(result.caPath).should.equal(true);
+        });
+
+        it('should default alias to array type', function () {
+            var result = yargs().option('ca-path', {
+              array: true,
+              alias: 'c'
+            }).parse([ '--ca-path', 'http://www.example.com' ]);
+
+            Array.isArray(result['ca-path']).should.equal(true);
+            Array.isArray(result.caPath).should.equal(true);
+            Array.isArray(result.c).should.equal(true);
+        });
+    });
+
+    describe('nargs', function() {
+        it('should allow the number of arguments following a key to be specified', function() {
+            var result = yargs().nargs('foo', 2)
+              .parse([ '--foo', 'apple', 'bar' ]);
+
+            Array.isArray(result.foo).should.equal(true);
+            result.foo[0].should.equal('apple');
+            result.foo[1].should.equal('bar');
+        });
+
+        it('should raise an exception if there are not enough arguments following key', function() {
+            expect(function() {
+              var result = yargs().nargs('foo', 2).
+                parse([ '--foo', 'apple']);
+            }).to.throw('not enough arguments following: foo');
+        });
+
+        it('nargs is applied to aliases', function() {
+            var result = yargs().nargs('foo', 2)
+              .alias('foo', 'bar')
+              .parse([ '--bar', 'apple', 'bar' ]);
+
+            Array.isArray(result.foo).should.equal(true);
+            result.foo[0].should.equal('apple');
+            result.foo[1].should.equal('bar');
+        });
+
+        it("should apply nargs to flag arguments", function() {
+            var result = yargs()
+              .option('f', {
+                nargs: 2
+              }).parse([ '-f', 'apple', 'bar', 'blerg' ]);
+
+            result.f[0].should.equal('apple');
+            result.f[1].should.equal('bar');
+            result._[0].should.equal('blerg');
+        });
+
+        it("allows multiple nargs to be set at the same time", function() {
+            var result = yargs().nargs({
+                'foo': 2,
+                'bar': 1
+              })
+              .parse([ '--foo', 'apple', 'bar', '--bar', 'banana', '-f' ]);
+
+            Array.isArray(result.foo).should.equal(true);
+            result.foo[0].should.equal('apple');
+            result.foo[1].should.equal('bar');
+            result.bar.should.equal('banana');
+            result.f.should.equal(true);
         });
     });
 });

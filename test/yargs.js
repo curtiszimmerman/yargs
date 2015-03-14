@@ -5,6 +5,10 @@ var should = require('chai').should(),
     path = require('path');
 
 describe('yargs dsl tests', function () {
+    beforeEach(function() {
+      yargs.reset();
+    });
+
     it('should use bin name for $0, eliminating path', function () {
       process.argv[1] = '/usr/local/bin/ndm';
       process.env._ = '/usr/local/bin/ndm';
@@ -22,6 +26,14 @@ describe('yargs dsl tests', function () {
         .argv
 
       argv.cat.should.eql(33);
+    });
+
+    it('populates argv with placeholder keys for all options', function() {
+      var argv = yargs([])
+        .option('cool', {})
+        .argv;
+
+      Object.keys(argv).should.include('cool');
     });
 
     it('accepts an object for implies', function() {
@@ -132,6 +144,48 @@ describe('yargs dsl tests', function () {
           });
 
           r.exit.should.eql(true);
+        });
+    });
+
+    describe('reset', function() {
+        it('should put yargs back into its initial state', function() {
+          // create a command line with all the things.
+          // so that we can confirm they're reset.
+          var y = yargs(['--help'])
+            .help('help')
+            .command('foo', 'bar')
+            .default('foo', 'bar')
+            .describe('foo', 'foo variable')
+            .demand('foo')
+            .string('foo')
+            .alias('foo', 'bar')
+            .string('foo')
+            .implies('foo', 'snuh')
+            .strict()
+            .exitProcess(false)  // defaults to true.
+            .reset();
+
+          var emptyOptions = {
+            array: [],
+            boolean: [],
+            string: [],
+            alias: {},
+            default: {},
+            key: {},
+            narg: {},
+            defaultDescription: {},
+            requiresArg: [],
+            count: [],
+            normalize: [],
+            config: []
+          };
+
+          expect(y.getOptions()).to.deep.equal(emptyOptions);
+          expect(y.getUsageInstance().getDescriptions()).to.deep.equal({});
+          expect(y.getValidationInstance().getImplied()).to.deep.equal({});
+          expect(y.getExitProcess()).to.equal(true);
+          expect(y.getStrict()).to.equal(false);
+          expect(y.getDemanded()).to.deep.equal({});
         });
     });
 });

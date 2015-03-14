@@ -288,13 +288,18 @@ line_count.js
 ````javascript
 #!/usr/bin/env node
 var argv = require('yargs')
-    .usage('Count the lines in a file.\nUsage: $0')
-    .example('$0 -f', 'count the lines in the given file')
+    .usage('Usage: $0 <command> [options]')
+    .command('count', 'Count the lines in a file')
+    .demand(1)
+    .example('$0 count -f foo.js', 'count the lines in the given file')
     .demand('f')
     .alias('f', 'file')
+    .nargs('f', 1)
     .describe('f', 'Load a file')
-    .argv
-;
+    .help('h')
+    .alias('h', 'help')
+    .epilog('copyright 2015')
+    .argv;
 
 var fs = require('fs');
 var s = fs.createReadStream(argv.file);
@@ -310,23 +315,27 @@ s.on('end', function () {
 ````
 
 ***
+    $ node line_count.js count
+    Usage: node test.js <command> [options]
 
-    $ node line_count.js
-    Count the lines in a file.
-    Usage: node ./line_count.js
-
-    Examples:
-      node ./line_count.js -f   count the lines in the given file
+    Commands:
+      count    Count the lines in a file
 
     Options:
-      -f, --file  Load a file  [required]
+      -f, --file  Load a file        [required]
+      -h, --help  Show help
+
+    Examples:
+      node test.js count -f foo.js    count the lines in the given file
+
+    copyright 2015
 
     Missing required arguments: f
 
-    $ node line_count.js --file line_count.js
+    $ node line_count.js count --file line_count.js
     20
 
-    $ node line_count.js -f line_count.js
+    $ node line_count.js count -f line_count.js
     20
 
 methods
@@ -364,12 +373,29 @@ Optionally `.alias()` can take an object that maps keys to aliases.
 Each key of this object should be the canonical version of the option, and each
 value should be a string or an array of strings.
 
-.default(key, value)
+.default(key, value, [description])
 --------------------
 
 Set `argv[key]` to `value` if no option was specified on `process.argv`.
 
 Optionally `.default()` can take an object that maps keys to default values.
+
+But wait, there's more! the default value can be a `function` which returns
+a value. The name of the function will be used in the usage string:
+
+```js
+var argv = require('yargs')
+  .default('random', function randomValue() {
+    return Math.random() * 256;
+  }).argv;
+```
+
+Optionally, `description` can also be provided and will take precedence over
+displaying the value in the usage instructions:
+
+```js
+.default('timeout', 60000, '(one-minute)');
+```
 
 .demand(key, [msg | boolean])
 -----------------------------
@@ -556,6 +582,24 @@ regardless of whether they resemble numbers.
 Tell the parser to interpret `key` as an array. If `.array('foo')` is set,
 `--foo bar` will be parsed as `['bar']` rather than as `'bar'`.
 
+.nargs(key, count)
+-----------
+
+The number of arguments that should be consumed after a key. This can be a
+useful hint to prevent parsing ambiguity:
+
+```js
+var argv = require('yargs')
+  .nargs('token', 1)
+  .parse(['--token', '-my-token']);
+```
+
+parses as:
+
+`{ _: [], token: '-my-token', '$0': 'node test' }`
+
+Optionally `.nargs()` can take an object of `key`/`narg` pairs.
+
 .config(key)
 ------------
 
@@ -658,6 +702,58 @@ yargs.showHelp();
 
 Later on, ```argv``` can be retrived with ```yargs.argv```
 
+.completion(cmd, [description], [fn]);
+-------------
+
+Enable bash-completion shortcuts for commands and options.
+
+`cmd`: when present in `argv._`, will result in the `.bashrc` completion script
+being outputted. To enable bash completions, concat the generated script to your
+`.bashrc`, or `.bash_profile`.
+
+`description`: provide a description in your usage instructions for the command
+that generates bash completion scripts.
+
+`fn`, rather than relying on yargs' default completion functionlity, which
+shiver me timbers is pretty awesome, you can provide your own completion
+method.
+
+```js
+var argv = require('yargs')
+  .completion('completion', function(current, argv) {
+    // 'current' is the current command being completed.
+    // 'argv' is the parsed arguments so far.
+    // simply return an array of completions.
+    return [
+      'foo',
+      'bar'
+    ];
+  })
+  .argv;
+```
+
+But wait, there's more! you can provide asynchronous completions.
+
+```js
+var argv = require('yargs')
+  .completion('completion', function(current, argv, done) {
+    setTimeout(function() {
+      done([
+        'apple',
+        'banana'
+      ]);
+    }, 500);
+  })
+  .argv;
+```
+
+.showCompletionScript()
+----------------------
+
+Generate a bash completion script. Users of your application can install this
+script in their `.bashrc`, and yargs will provide completion shortcuts for
+commands and options.
+
 .exitProcess(enable)
 ----------------------------------
 
@@ -667,6 +763,42 @@ By default, yargs exits the process when the user passes a help flag, uses the `
 ------------
 
 Parse `args` instead of `process.argv`. Returns the `argv` object.
+
+.reset()
+--------
+
+Reset the argument object built up so far. This is useful for
+creating nested command line interfaces.
+
+```js
+var yargs = require('./yargs')
+  .usage('$0 command')
+  .command('hello', 'hello command')
+  .command('world', 'world command')
+  .demand(1, 'must provide a valid command'),
+  argv = yargs.argv,
+  command = argv._[0];
+
+if (command === 'hello') {
+  yargs.reset()
+    .usage('$0 hello')
+    .help('h')
+    .example('$0 hello', 'print the hello message!')
+    .argv
+
+  console.log('hello!');
+} else if (command === 'world'){
+  yargs.reset()
+    .usage('$0 world')
+    .help('h')
+    .example('$0 world', 'print the world message!')
+    .argv
+
+  console.log('world!');
+} else {
+  yargs.showHelp();
+}
+```
 
 .argv
 -----
@@ -758,10 +890,9 @@ or clone this project on github:
 
     git clone http://github.com/bcoe/yargs.git
 
-To run the tests with [expresso](http://github.com/visionmedia/expresso),
-just do:
+To run the tests with npm, just do:
 
-    expresso
+    npm test
 
 inspired by
 ===========
